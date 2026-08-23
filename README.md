@@ -47,11 +47,6 @@ Self-demo only (author or consenting volunteer). No real patient names, IDs, or 
 | `HTML_SessionReport_Screenshot` | Post-session clinician HTML report: ROM curve, quality / compensation summary, encrypted at rest in the app. |
 | `Progress Report — Kadir Özdemir` | Multi-session progress export (print/PDF of the local HTML report). Decision support, not a diagnosis. |
 
-```markdown
-![Main menu](docs/main-menu.png)
-![Target angle panel](docs/target-angle-panel.png)
-![Session report](docs/session-report.png)
-```
 
 ## Not in this repo
 
