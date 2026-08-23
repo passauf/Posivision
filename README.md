@@ -41,11 +41,11 @@ Self-demo only (author or consenting volunteer). No real patient names, IDs, or 
 
 | File | What you are looking at |
 | --- | --- |
-| `docs/main-menu.png` | Main menu: local profiles, start session, clinician/progress entry. Data stays on device. |
-| `docs/target-angle-panel.png` | Pre-session target panel: planned ROM (degrees) and rep count before the camera loop starts. |
-| `docs/session-live.mp4` | ~60s in-session capture: webcam + pose overlay / HUD (reps, form cues). Not a stored clinical video file. |
-| `docs/session-report.png` | Post-session clinician HTML report: ROM curve, quality / compensation summary, encrypted at rest in the app. |
-| `docs/progress-report.pdf` | Multi-session progress export (print/PDF of the local HTML report). Decision support, not a diagnosis. |
+| `MainMenu_Screenshot` | Main menu: local profiles, start session, clinician/progress entry. Data stays on device. |
+| `TargetAngle_Screenshot` | Pre-session target panel: planned ROM (degrees) and rep count before the camera loop starts. |
+| `InSession_Screen_Record` | ~60s in-session capture: webcam + pose overlay / HUD (reps, form cues). Not a stored clinical video file. |
+| `HTML_SessionReport_Screenshot` | Post-session clinician HTML report: ROM curve, quality / compensation summary, encrypted at rest in the app. |
+| `Progress Report — Kadir Özdemir` | Multi-session progress export (print/PDF of the local HTML report). Decision support, not a diagnosis. |
 
 ```markdown
 ![Main menu](docs/main-menu.png)
