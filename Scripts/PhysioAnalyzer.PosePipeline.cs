@@ -231,7 +231,7 @@ public partial class PhysioAnalyzer
             _shoulderWidth = 1f;
 
         _sideProfileSessionGate.Evaluate(
-            patientSideView,
+            _movementProtocolProfile.enableSideProfileGate && patientSideView,
             rawWidth,
             shoulderWOk,
             _rawPoseScaleValid ? _rawPoseScaleLength : 0f,
@@ -475,97 +475,62 @@ public partial class PhysioAnalyzer
         if (!_nativeReady) AllocateNative();
         EnsureMovementStrategy();
 
-        // index 0 = MP sağ: hip, shoulder, elbow
-        // Omuz fleksiyonu: kalça+omuz+dirsek yeterli; bacaklar hiç hesaplanmaz / tahmin edilmez.
-        _jobEnabled[0] = mpRightOk;
-        if (mpRightOk)
+        var scheduleInput = new ShoulderElevationAnglePipeline.ScheduleInput
         {
-            _jobLandmarks[0] = ToFloat2(_filteredXy[IdxRightHip]);
-            _jobLandmarks[1] = ToFloat2(_filteredXy[IdxRightShoulder]);
-            _jobLandmarks[2] = ToFloat2(_filteredXy[IdxRightElbow]);
-            if (_shoulderElevationAnalyzer != null)
-            {
-                _shoulderElevationAnalyzer.UpdateReferenceArmLength(
-                    0, _filteredXy[IdxRightShoulder], _filteredXy[IdxRightElbow]);
-                _jobRefArmLengths[0] = _shoulderElevationAnalyzer.GetReferenceArmLength(0);
-            }
-        }
-
-        // index 1 = MP sol
-        _jobEnabled[1] = mpLeftOk;
-        if (mpLeftOk)
-        {
-            _jobLandmarks[3] = ToFloat2(_filteredXy[IdxLeftHip]);
-            _jobLandmarks[4] = ToFloat2(_filteredXy[IdxLeftShoulder]);
-            _jobLandmarks[5] = ToFloat2(_filteredXy[IdxLeftElbow]);
-            if (_shoulderElevationAnalyzer != null)
-            {
-                _shoulderElevationAnalyzer.UpdateReferenceArmLength(
-                    1, _filteredXy[IdxLeftShoulder], _filteredXy[IdxLeftElbow]);
-                _jobRefArmLengths[1] = _shoulderElevationAnalyzer.GetReferenceArmLength(1);
-            }
-        }
-
-        var angleJob = new JointAngleJob
-        {
-            landmarks = _jobLandmarks,
-            referenceArmLengths = _jobRefArmLengths,
-            anglesOut = _jobAngles,
-            enabled = _jobEnabled
-        };
-
-        JobHandle angleHandle = angleJob.Schedule(ArmJobCount, 1);
-
-        // Kompansasyon lean: kalça görünürse her zaman aktif (oturarak dahil). Bacak gerekmez.
-        if (torsoOk)
-        {
-            var leanJob = new SpineLeanJob
-            {
-                leftShoulder = ToFloat2(_filteredXy[IdxLeftShoulder]),
-                rightShoulder = ToFloat2(_filteredXy[IdxRightShoulder]),
-                leftHip = ToFloat2(_filteredXy[IdxLeftHip]),
-                rightHip = ToFloat2(_filteredXy[IdxRightHip]),
-                leanDegreesOut = _jobLeanOut
-            };
-            JobHandle leanHandle = leanJob.Schedule();
-            JobHandle.CombineDependencies(angleHandle, leanHandle).Complete();
-            _lastSpineLeanDegrees = _jobLeanOut[0];
-        }
-        else
-        {
-            angleHandle.Complete();
-            _lastSpineLeanDegrees = 0f;
-            _spineCompensationGate.ClearSticky();
-        }
-
-        // Omuz fleksiyon yorumu stratejide (SoftFollow / foreshorten / forearm guard)
-        var frameCtx = new MovementFrameContext
-        {
-            deltaTime = Time.unscaledDeltaTime,
-            swapArms = swap,
             mpRightOk = mpRightOk,
             mpLeftOk = mpLeftOk,
             mpRightWristOk = mpRightWristOk,
             mpLeftWristOk = mpLeftWristOk,
+            torsoOk = torsoOk,
+            swap = swap,
             clinicalRightOk = clinicalRightOk,
             clinicalLeftOk = clinicalLeftOk,
-            jobAngleMpRight = mpRightOk ? _jobAngles[0] : float.NaN,
-            jobAngleMpLeft = mpLeftOk ? _jobAngles[1] : float.NaN,
-            mpRightShoulder = _filteredXy[IdxRightShoulder],
-            mpRightElbow = _filteredXy[IdxRightElbow],
-            mpRightWrist = _filteredXy[IdxRightWrist],
-            mpLeftShoulder = _filteredXy[IdxLeftShoulder],
-            mpLeftElbow = _filteredXy[IdxLeftElbow],
-            mpLeftWrist = _filteredXy[IdxLeftWrist],
             bodyYawDegrees = CurrentBodyYawDegrees,
             patientSideView = patientSideView,
-            // Teorik mesafe/yaw proxy: ham omuz genişliği (yan φ ayrı; normalize ölçeği değil)
-            rawShoulderWidth01 = _rawShoulderWidthValid ? _rawShoulderWidthForQuality : 0f
+            rawShoulderWidth01 = _rawShoulderWidthValid ? _rawShoulderWidthForQuality : 0f,
+            rightHip = _filteredXy[IdxRightHip],
+            rightShoulder = _filteredXy[IdxRightShoulder],
+            rightElbow = _filteredXy[IdxRightElbow],
+            rightWrist = _filteredXy[IdxRightWrist],
+            leftHip = _filteredXy[IdxLeftHip],
+            leftShoulder = _filteredXy[IdxLeftShoulder],
+            leftElbow = _filteredXy[IdxLeftElbow],
+            leftWrist = _filteredXy[IdxLeftWrist],
+            leanLeftShoulder = _filteredXy[IdxLeftShoulder],
+            leanRightShoulder = _filteredXy[IdxRightShoulder],
+            leanLeftHip = _filteredXy[IdxLeftHip],
+            leanRightHip = _filteredXy[IdxRightHip],
+            elevationAnalyzer = _movementAnalyzer as IShoulderElevationAnalyzer,
+            movementAnalyzer = _movementAnalyzer,
+            jobLandmarks = _jobLandmarks,
+            jobAngles = _jobAngles,
+            jobEnabled = _jobEnabled,
+            jobRefArmLengths = _jobRefArmLengths,
+            jobLeanOut = _jobLeanOut
         };
-        MovementFrameResult frameResult = default;
-        if (_movementAnalyzer != null)
-            _movementAnalyzer.ProcessFrame(in frameCtx, ref frameResult);
 
+        ShoulderElevationAnglePipeline.ScheduleOutput pipelineOut;
+        if (_movementAnalyzer == null
+            || !MovementFramePipelineDispatcher.TryScheduleAngles(
+                _movementAnalyzer.Family, in scheduleInput, out pipelineOut))
+        {
+            if (torsoOk)
+            {
+                _lastSpineLeanDegrees = 0f;
+                _spineCompensationGate.ClearSticky();
+            }
+            return;
+        }
+
+        if (torsoOk)
+            _lastSpineLeanDegrees = pipelineOut.spineLeanDegrees;
+        else
+        {
+            _lastSpineLeanDegrees = 0f;
+            _spineCompensationGate.ClearSticky();
+        }
+
+        MovementFrameResult frameResult = pipelineOut.frameResult;
         _physicRight = frameResult.clinicalRightAngle;
         _physicLeft = frameResult.clinicalLeftAngle;
         if (frameResult.hasClinicalData)
@@ -573,7 +538,7 @@ public partial class PhysioAnalyzer
 
         _foreshortenMpRight = frameResult.foreshortenMpRight;
         _foreshortenMpLeft = frameResult.foreshortenMpLeft;
-        if (frameResult.notifyForeshorten)
+        if (frameResult.notifyForeshorten && _movementProtocolProfile.foreshortenWarnFeedback)
             NotifyForeshorteningFeedback();
 
         _repGateRightValid = frameResult.repGateRightValid;
@@ -581,10 +546,8 @@ public partial class PhysioAnalyzer
         if (_repGateRightValid) _lastRepGateRight = frameResult.repGateRight;
         if (_repGateLeftValid) _lastRepGateLeft = frameResult.repGateLeft;
 
-        // Yardımlı sezgi: klinik açı + yardımcı elevasyon (yakınlık ∧ eş hareket ∧ kaldırma)
         UpdateAssistedRepAfterAngles(swap, mpRightOk, mpLeftOk, mpRightWristOk, mpLeftWristOk);
 
-        // Avatar: anatomik sağ/sol (ön kamerada MP etiketi terslenebilir)
         PushAnglesToAvatar(
             swap,
             frameResult.avatarMpRightOk, frameResult.avatarMpRightAngle,

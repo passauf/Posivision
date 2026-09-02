@@ -31,9 +31,10 @@ public partial class PhysioAnalyzer
             measureLeftArm = ExerciseCatalog.AllowsSimultaneousBilateral(_selectedMovementId);
         }
 
-        // Egzersiz maskesi + yan seçimi
-        ExerciseDefinition def = ExerciseCatalog.GetOrDefault(_selectedMovementId);
-        PoseRegionMask baseMask = def.BuildMask();
+        // Egzersiz maskesi — analyzer RequiredMask öncelikli
+        PoseRegionMask baseMask = _movementAnalyzer != null
+            ? _movementAnalyzer.RequiredMask
+            : ExerciseCatalog.GetOrDefault(_selectedMovementId).BuildMask();
         regionMask = baseMask;
         regionMask.rightArm = baseMask.rightArm && measureRightArm;
         regionMask.leftArm = baseMask.leftArm && measureLeftArm;
@@ -120,20 +121,27 @@ public partial class PhysioAnalyzer
             Mathf.Max(targetAngleDegrees * SliderMotivationalRatio, targetAngleDegrees + SliderMotivationalSlackDegrees),
             SliderMinFullDegrees, 180f);
         _lastShownTargetReps = int.MinValue;
-        SyncFlexionTargetsToAvatar();
+        SyncMovementTargetsToAvatar();
         RefreshUiTexts(force: true);
     }
 
     /// <summary>Radial yay rengi/track: kişisel hedef açı (0→hedef = kırmızı→yeşil).</summary>
-    private void SyncFlexionTargetsToAvatar()
+    private void SyncMovementTargetsToAvatar()
     {
         if (_avatarBodyDriver == null && !_avatarLookupAttempted)
         {
             _avatarBodyDriver = FindObjectOfType<AvatarBodyDriver>(true);
             _avatarLookupAttempted = true;
         }
-        if (_avatarBodyDriver != null)
-            _avatarBodyDriver.SetFlexionTargets(targetAngleDegrees, targetAngleDegrees);
+        if (_avatarBodyDriver == null) return;
+
+        if (_movementAnalyzer is IMovementAvatarHooks hooks)
+        {
+            hooks.SyncAvatarTargets(_avatarBodyDriver, targetAngleDegrees, targetAngleDegrees);
+            return;
+        }
+
+        _avatarBodyDriver.SetFlexionTargets(targetAngleDegrees, targetAngleDegrees);
     }
 
     /// <summary>
@@ -300,7 +308,7 @@ public partial class PhysioAnalyzer
         }
 
         RefreshRepLowerLimitFromTarget();
-        SyncFlexionTargetsToAvatar();
+        SyncMovementTargetsToAvatar();
 
         while (_poseQueue.TryDequeue(out _)) { }
 

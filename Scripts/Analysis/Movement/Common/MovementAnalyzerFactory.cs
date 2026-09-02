@@ -1,5 +1,7 @@
 /// <summary>
 /// Hareket stratejisi fabrikası — MovementId / aileye göre analyzer + rep policy.
+/// Yeni hareket: klasör + IMovementAnalyzer + IRepPolicy + buraya case ekle.
+/// PhysioAnalyzer somut tip bilmez.
 /// SaMD Class B; teşhis değildir.
 /// </summary>
 public static class MovementAnalyzerFactory

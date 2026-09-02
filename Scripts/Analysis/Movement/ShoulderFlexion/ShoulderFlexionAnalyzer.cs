@@ -4,9 +4,10 @@ using UnityEngine;
 /// Omuz fleksiyonu (yan profil): kalça–omuz–dirsek ROM; bilek/foreshortening/yaw yok.
 /// SaMD Class B; teşhis değildir.
 /// </summary>
-public sealed class ShoulderFlexionAnalyzer : IShoulderElevationAnalyzer
+public sealed class ShoulderFlexionAnalyzer : IShoulderElevationAnalyzer, IMovementConfigurable, IMovementAvatarHooks
 {
     public MovementId Id => MovementId.ShoulderFlexion;
+    public MovementAnalysisFamily Family => MovementAnalysisFamily.ShoulderElevation;
     public PoseRegionMask RequiredMask => PoseRegionMask.ShoulderFlexion();
 
     private ShoulderFlexionAnalyzerConfig _config;
@@ -19,6 +20,18 @@ public sealed class ShoulderFlexionAnalyzer : IShoulderElevationAnalyzer
     public void Configure(in ShoulderFlexionAnalyzerConfig config)
     {
         _config = config;
+    }
+
+    public void ApplyHostSettings(in MovementHostSettings settings)
+    {
+        _config = new ShoulderFlexionAnalyzerConfig { reference = settings.reference };
+        ConfigureRomCorrection(settings.romCorrection);
+    }
+
+    public void SyncAvatarTargets(AvatarBodyDriver driver, float targetRightDegrees, float targetLeftDegrees)
+    {
+        if (driver == null) return;
+        driver.SetFlexionTargets(targetRightDegrees, targetLeftDegrees);
     }
 
     public void ConfigureRomCorrection(in TheoreticalRomCorrectionConfig config)

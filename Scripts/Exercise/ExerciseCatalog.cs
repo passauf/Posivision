@@ -57,7 +57,8 @@ public enum RadialArcKind : byte
 /// Yeni hareket ekleme (check list):
 /// 1) <see cref="MovementId"/> değeri ekle (çakışmayan int)
 /// 2) <see cref="ExerciseCatalog"/> All[] satırı: LocKey, Implemented, Camera, RaisePlane, Family, Avatar, Sequential, Simultaneous, ProtocolLocKey
-/// 3) Family yeni ise: IMovementAnalyzer + IRepPolicy + <see cref="MovementAnalyzerFactory"/> case
+/// 3) Family yeni ise: IMovementAnalyzer (+ IMovementConfigurable) + IRepPolicy + MovementProtocolProfile + factory case
+///    Omuz elevasyon: ShoulderElevationAnglePipeline. Dirsek: ElbowHingeAnglePipeline (gelecek).
 /// 4) Loc.cs’e exercise.move.* (+ isteğe bağlı report.protocol.*)
 /// 5) Implemented=true yap; geçmiş filtresi otomatik (CopyLiveMovements)
 /// </summary>

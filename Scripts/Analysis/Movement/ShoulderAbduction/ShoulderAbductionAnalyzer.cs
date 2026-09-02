@@ -4,9 +4,10 @@ using UnityEngine;
 /// Omuz abdüksiyonu (ön kamera): elevasyon + foreshortening + yaw düzeltmesi + önkol artefakt koruması.
 /// SaMD Class B; teşhis değildir.
 /// </summary>
-public sealed class ShoulderAbductionAnalyzer : IShoulderElevationAnalyzer
+public sealed class ShoulderAbductionAnalyzer : IShoulderElevationAnalyzer, IMovementConfigurable, IMovementAvatarHooks
 {
     public MovementId Id => MovementId.ShoulderAbduction;
+    public MovementAnalysisFamily Family => MovementAnalysisFamily.ShoulderElevation;
     public PoseRegionMask RequiredMask => PoseRegionMask.ShoulderFlexion();
 
     private ShoulderAbductionAnalyzerConfig _config;
@@ -23,6 +24,19 @@ public sealed class ShoulderAbductionAnalyzer : IShoulderElevationAnalyzer
     public void Configure(in ShoulderAbductionAnalyzerConfig config)
     {
         _config = config;
+    }
+
+    public void ApplyHostSettings(in MovementHostSettings settings)
+    {
+        _config = settings.abduction;
+        _config.reference = settings.reference;
+        ConfigureRomCorrection(settings.romCorrection);
+    }
+
+    public void SyncAvatarTargets(AvatarBodyDriver driver, float targetRightDegrees, float targetLeftDegrees)
+    {
+        if (driver == null) return;
+        driver.SetFlexionTargets(targetRightDegrees, targetLeftDegrees);
     }
 
     public void ConfigureRomCorrection(in TheoreticalRomCorrectionConfig config)

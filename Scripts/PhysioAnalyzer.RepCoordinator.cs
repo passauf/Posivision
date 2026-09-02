@@ -34,18 +34,37 @@ public partial class PhysioAnalyzer
         bool invalidateLeanEarly = _torsoRegionActive && _spineCompensationGate.Evaluate(
             _lastSpineLeanDegrees, patientAgeYears, out warnLeanRep,
             warningManager, _voiceCoach, enableVoiceCoach, reportManager);
-        bool invalidateFacingEarly = _frontalFacingGate.CheckWarnings(
-            patientSideView, warningManager, _voiceCoach, enableVoiceCoach);
+        bool invalidateFacingEarly = _movementProtocolProfile.enableYawGate
+            && _frontalFacingGate.CheckWarnings(
+                patientSideView, warningManager, _voiceCoach, enableVoiceCoach);
         bool invalidateStrainEarly = CheckFaceStrainWarning();
-        bool invalidateSideEarly = patientSideView && !_sideProfileSessionGate.MeasurementValid;
+        bool invalidateSideEarly = _movementProtocolProfile.enableSideProfileGate
+            && patientSideView
+            && !_sideProfileSessionGate.MeasurementValid;
         if (invalidateSideEarly)
             _sideProfileSessionGate.MaybeWarnInvalid(warningManager);
-        else if (patientSideView)
+        else if (_movementProtocolProfile.enableSideProfileGate && patientSideView)
             _sideProfileSessionGate.MaybeWarnSoft(warningManager);
-        bool invalidatePoseEarly = invalidateLeanEarly || invalidateFacingEarly || invalidateStrainEarly || invalidateSideEarly;
+
         bool swapArmsEarly = ShouldSwapArmLaterality();
         bool fsClinicalRightEarly = swapArmsEarly ? _foreshortenMpLeft : _foreshortenMpRight;
         bool fsClinicalLeftEarly = swapArmsEarly ? _foreshortenMpRight : _foreshortenMpLeft;
+
+        var invalidationInput = new MovementInvalidationAssembler.Input
+        {
+            protocol = _movementProtocolProfile,
+            patientSideView = patientSideView,
+            torsoActive = _torsoRegionActive,
+            invalidateLean = invalidateLeanEarly,
+            invalidateFacing = invalidateFacingEarly,
+            invalidateStrain = invalidateStrainEarly,
+            sideMeasurementValid = _sideProfileSessionGate.MeasurementValid,
+            foreshortenClinicalRight = fsClinicalRightEarly,
+            foreshortenClinicalLeft = fsClinicalLeftEarly,
+            measureRightArm = measureRightArm,
+            measureLeftArm = measureLeftArm
+        };
+        MovementInvalidationAssembler.Evaluate(in invalidationInput, out MovementInvalidationAssembler.Output invalidation);
 
         if (!_romAssessmentAnalyzing)
         {
@@ -54,13 +73,13 @@ public partial class PhysioAnalyzer
                     _lastRepGateRight, _repGateRightValid, repDt,
                     rightRepText, Loc.T("hud.rep.right"),
                     ref _armRepR, ref _lastShownCountR, ref _cachedRightRep,
-                    invalidatePoseEarly || fsClinicalRightEarly, true);
+                    invalidation.invalidateRightRep, true);
             if (measureLeftArm)
                 TickRepViaPolicy(
                     _lastRepGateLeft, _repGateLeftValid, repDt,
                     leftRepText, Loc.T("hud.rep.left"),
                     ref _armRepL, ref _lastShownCountL, ref _cachedLeftRep,
-                    invalidatePoseEarly || fsClinicalLeftEarly, false);
+                    invalidation.invalidateLeftRep, false);
         }
         else if (_romAssessmentAnalyzing)
         {
@@ -87,9 +106,6 @@ public partial class PhysioAnalyzer
         bool warnLean = warnLeanRep;
         PushCompensationLeanVisual(warnLean);
 
-        bool foreshortenClinicalRight = fsClinicalRightEarly;
-        bool foreshortenClinicalLeft = fsClinicalLeftEarly;
-
         if (measureRightArm)
             UpdateArm(true, _physicRight, rightSlider, rightColorCtrl, rightAngleText,
                 ref _cachedRightAngle, ref _lastShownRightAngle);
@@ -103,9 +119,9 @@ public partial class PhysioAnalyzer
                 reportManager.RegisterStrainSample(faceStrainAnalyzer.CurrentEffort01, _physicRight, _physicLeft);
 
             bool allowPeak = _qualityFramePublisher.QualityAllowsPeakRom
-                && IsFrontalFacingOk
-                && !(measureRightArm && foreshortenClinicalRight)
-                && !(measureLeftArm && foreshortenClinicalLeft);
+                && (!_movementProtocolProfile.yawAffectsPeakRom || IsFrontalFacingOk)
+                && !invalidation.blockPeakRomRight
+                && !invalidation.blockPeakRomLeft;
             reportManager.RegisterAngleSample(
                 _physicRight, _physicLeft, measureRightArm, measureLeftArm,
                 allowPeakUpdate: allowPeak,
@@ -275,7 +291,7 @@ public partial class PhysioAnalyzer
             Mathf.Max(targetAngleDegrees * SliderMotivationalRatio, targetAngleDegrees + SliderMotivationalSlackDegrees),
             SliderMinFullDegrees, 180f);
         _romAssessmentAnalyzing = false;
-        SyncFlexionTargetsToAvatar();
+        SyncMovementTargetsToAvatar();
         _countR = 0;
         _countL = 0;
         _isUpR = false;

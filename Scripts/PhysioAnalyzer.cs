@@ -9,8 +9,9 @@ using TMPro;
 using Mediapipe.Tasks.Components.Containers;
 
 /// <summary>
-/// Pose Landmarker tabanlı omuz fleksiyon ROM analizi — ince orkestratör (composition root).
+/// Pose Landmarker tabanlı ROM orkestratörü (composition root).
 /// Parçalar: PhysioAnalyzer.Session, .PosePipeline, .RepCoordinator.
+/// Hareket mantığı IMovementAnalyzer / IRepPolicy / aile pipeline'larında; bu sınıf hareket adına dallanmaz.
 /// LIVE_STREAM callback thread-safe: landmark kopyası ConcurrentQueue ile ana thread'e aktarılır.
 /// SaMD Class B: ROM ve kompansasyon çıktıları klinik karar destek bilgisidir.
 /// </summary>
@@ -366,10 +367,10 @@ public partial class PhysioAnalyzer : MonoBehaviour
     private AvatarBodyDriver _avatarBodyDriver;
     private bool _avatarLookupAttempted;
 
-    // Hareket stratejisi (Faz 1: omuz fleksiyonu). Refactor only — klinik eşik değişikliği yok.
+    // Hareket stratejisi — factory + protokol profili; somut analyzer tipi host'ta yok.
     private IMovementAnalyzer _movementAnalyzer;
-    private IShoulderElevationAnalyzer _shoulderElevationAnalyzer;
     private IRepPolicy _repPolicy;
+    private MovementProtocolProfile _movementProtocolProfile;
     private ArmRepState _armRepR;
     private ArmRepState _armRepL;
 
@@ -456,8 +457,8 @@ public partial class PhysioAnalyzer : MonoBehaviour
         ExerciseDefinition def = ExerciseCatalog.GetOrDefault(_selectedMovementId);
         _selectedBodyRegionId = def.RegionId;
         patientSideView = ExerciseCatalog.UsesSideProfile(_selectedMovementId);
-        SetRegionMask(def.BuildMask());
         EnsureMovementStrategy();
+        SetRegionMask(_movementAnalyzer != null ? _movementAnalyzer.RequiredMask : def.BuildMask());
         ApplyRaisePlaneForMovement();
         ConfigureGateServices();
         ConfigureAssistPresenceTracker();
@@ -517,8 +518,6 @@ public partial class PhysioAnalyzer : MonoBehaviour
     [SerializeField] private int movementTemplatePoints = 60;
 
     // Burst/Jobs — Awake'te tahsis, OnDestroy'da Dispose (hot path allocation yok)
-    private const int ArmJobCount = 2;
-    private const int LandmarkTripletCount = 6; // 2 kol * (hip,shoulder,elbow)
     private NativeArray<float2> _jobLandmarks;
     private NativeArray<float> _jobAngles;
     private NativeArray<bool> _jobEnabled;
@@ -607,7 +606,7 @@ public partial class PhysioAnalyzer : MonoBehaviour
 
         _frontalFacingGate.Configure(new FrontalFacingGate.Config
         {
-            enableSessionYawGate = enableSessionYawGate,
+            enableSessionYawGate = _movementProtocolProfile.enableYawGate && enableSessionYawGate,
             maxBodyYawDegrees = maxBodyYawDegrees,
             bodyYawHysteresisDegrees = bodyYawHysteresisDegrees,
             requireFullFrontalTorso = requireFullFrontalTorso,
@@ -624,9 +623,58 @@ public partial class PhysioAnalyzer : MonoBehaviour
         });
     }
 
+    private MovementHostSettings BuildMovementHostSettings()
+    {
+        var settings = new MovementHostSettings
+        {
+            reference = new ShoulderElevationReferenceConfig
+            {
+                refUpdateMinRatio = foreshorteningRefUpdateMinRatio,
+                refUpdateMaxRatio = foreshorteningRefUpdateMaxRatio
+            },
+            abduction = new ShoulderAbductionAnalyzerConfig
+            {
+                reference = new ShoulderElevationReferenceConfig
+                {
+                    refUpdateMinRatio = foreshorteningRefUpdateMinRatio,
+                    refUpdateMaxRatio = foreshorteningRefUpdateMaxRatio
+                },
+                suppressForearmRotationArtifact = suppressForearmRotationArtifact,
+                forearmRotationElbowDeltaDegrees = forearmRotationElbowDeltaDegrees,
+                forearmRotationFlexionDeltaDegrees = forearmRotationFlexionDeltaDegrees,
+                foreshorteningMinArmRatio = foreshorteningMinArmRatio,
+                foreshorteningMinChainRatio = foreshorteningMinChainRatio,
+                foreshorteningMinElbowExtensionDegrees = foreshorteningMinElbowExtensionDegrees
+            },
+            romCorrection = new TheoreticalRomCorrectionConfig
+            {
+                enabled = enableTheoreticalRomCorrection,
+                correctForeshortening = correctForeshorteningProjection,
+                correctYaw = correctBodyYawProjection,
+                correctDistanceProxy = correctDistanceProxy,
+                foreshortenGain = theoreticalForeshortenGain,
+                yawGain = theoreticalYawGain,
+                minYawDegrees = theoreticalMinYawDegrees,
+                maxYawCorrectionDegrees = theoreticalMaxYawCorrectionDegrees,
+                idealShoulderWidth01 = idealShoulderWidth01,
+                distanceBlendStrength = distanceBlendStrength
+            },
+            rep = new RepPolicyHostConfig
+            {
+                holdSeconds = repTargetHoldSeconds,
+                enterSlackDegrees = repTargetEnterSlackDegrees,
+                returnRatio = repReturnRatio,
+                lowerMinDegrees = repLowerMinDegrees,
+                lowerMaxDegrees = repLowerMaxDegrees,
+                minTravelDegrees = repMinTravelDegrees
+            },
+            foreshorteningWarningCooldownSeconds = foreshorteningWarningCooldownSeconds
+        };
+        return settings;
+    }
+
     /// <summary>
     /// Katalog hareketine göre analizör/tekrar politikası.
-    /// Fleksiyon + abdüksiyon ortak elevasyon pipeline kullanır.
     /// SaMD Class B; teşhis değildir.
     /// </summary>
     private void EnsureMovementStrategy()
@@ -642,72 +690,31 @@ public partial class PhysioAnalyzer : MonoBehaviour
         if (needNew)
         {
             _movementAnalyzer = MovementAnalyzerFactory.CreateAnalyzer(id);
-            _shoulderElevationAnalyzer = _movementAnalyzer as IShoulderElevationAnalyzer;
             _repPolicy = MovementAnalyzerFactory.CreateRepPolicy(id);
+            _movementProtocolProfile = MovementProtocolProfile.ForMovement(id);
         }
 
-        ConfigureMovementStrategy();
+        ApplyMovementHostSettings();
+    }
+
+    private void ApplyMovementHostSettings()
+    {
+        MovementHostSettings settings = BuildMovementHostSettings();
+
+        if (_movementAnalyzer is IMovementConfigurable configurable)
+            configurable.ApplyHostSettings(in settings);
+
+        if (_repPolicy != null)
+        {
+            _repPolicy.Configure(settings.rep);
+            _repPolicy.SetTargetDegrees(targetAngleDegrees);
+            repLowerLimitDegrees = _repPolicy.LowerLimitDegrees;
+        }
     }
 
     private void ConfigureMovementStrategy()
     {
-        var referenceCfg = new ShoulderElevationReferenceConfig
-        {
-            refUpdateMinRatio = foreshorteningRefUpdateMinRatio,
-            refUpdateMaxRatio = foreshorteningRefUpdateMaxRatio
-        };
-
-        if (_movementAnalyzer is ShoulderFlexionAnalyzer flexAnalyzer)
-        {
-            flexAnalyzer.Configure(new ShoulderFlexionAnalyzerConfig { reference = referenceCfg });
-        }
-        else if (_movementAnalyzer is ShoulderAbductionAnalyzer abdAnalyzer)
-        {
-            abdAnalyzer.Configure(new ShoulderAbductionAnalyzerConfig
-            {
-                reference = referenceCfg,
-                suppressForearmRotationArtifact = suppressForearmRotationArtifact,
-                forearmRotationElbowDeltaDegrees = forearmRotationElbowDeltaDegrees,
-                forearmRotationFlexionDeltaDegrees = forearmRotationFlexionDeltaDegrees,
-                foreshorteningMinArmRatio = foreshorteningMinArmRatio,
-                foreshorteningMinChainRatio = foreshorteningMinChainRatio,
-                foreshorteningMinElbowExtensionDegrees = foreshorteningMinElbowExtensionDegrees
-            });
-        }
-
-        if (_shoulderElevationAnalyzer != null)
-        {
-            var romCfg = new TheoreticalRomCorrectionConfig
-            {
-                enabled = enableTheoreticalRomCorrection,
-                correctForeshortening = correctForeshorteningProjection,
-                correctYaw = correctBodyYawProjection,
-                correctDistanceProxy = correctDistanceProxy,
-                foreshortenGain = theoreticalForeshortenGain,
-                yawGain = theoreticalYawGain,
-                minYawDegrees = theoreticalMinYawDegrees,
-                maxYawCorrectionDegrees = theoreticalMaxYawCorrectionDegrees,
-                idealShoulderWidth01 = idealShoulderWidth01,
-                distanceBlendStrength = distanceBlendStrength
-            };
-            _shoulderElevationAnalyzer.ConfigureRomCorrection(romCfg);
-        }
-
-        if (_repPolicy != null)
-        {
-            var repCfg = new RepPolicyHostConfig
-            {
-                holdSeconds = repTargetHoldSeconds,
-                enterSlackDegrees = repTargetEnterSlackDegrees,
-                returnRatio = repReturnRatio,
-                lowerMinDegrees = repLowerMinDegrees,
-                lowerMaxDegrees = repLowerMaxDegrees,
-                minTravelDegrees = repMinTravelDegrees
-            };
-            _repPolicy.Configure(repCfg);
-            _repPolicy.SetTargetDegrees(targetAngleDegrees);
-            repLowerLimitDegrees = _repPolicy.LowerLimitDegrees;
-        }
+        ApplyMovementHostSettings();
     }
 
     /// <summary>
@@ -739,10 +746,10 @@ public partial class PhysioAnalyzer : MonoBehaviour
     private void AllocateNative()
     {
         if (_nativeReady) return;
-        _jobLandmarks = new NativeArray<float2>(LandmarkTripletCount, Allocator.Persistent);
-        _jobAngles = new NativeArray<float>(ArmJobCount, Allocator.Persistent);
-        _jobEnabled = new NativeArray<bool>(ArmJobCount, Allocator.Persistent);
-        _jobRefArmLengths = new NativeArray<float>(ArmJobCount, Allocator.Persistent);
+        _jobLandmarks = new NativeArray<float2>(ShoulderElevationAnglePipeline.LandmarkTripletCount, Allocator.Persistent);
+        _jobAngles = new NativeArray<float>(ShoulderElevationAnglePipeline.ArmJobCount, Allocator.Persistent);
+        _jobEnabled = new NativeArray<bool>(ShoulderElevationAnglePipeline.ArmJobCount, Allocator.Persistent);
+        _jobRefArmLengths = new NativeArray<float>(ShoulderElevationAnglePipeline.ArmJobCount, Allocator.Persistent);
         _jobLeanOut = new NativeArray<float>(1, Allocator.Persistent);
         _nativeReady = true;
     }
