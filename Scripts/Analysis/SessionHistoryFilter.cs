@@ -56,6 +56,8 @@ public static class SessionHistoryFilter
     public const string PrefKeyDate = "history_filter_date";
     public const string PrefKeyQuality = "history_filter_quality";
     public const string PrefKeyExercise = "history_filter_exercise";
+    public const string PrefKeyRegion = "history_filter_region";
+    public const string PrefKeyMovement = "history_filter_movement";
     [Obsolete("Use PrefKeyDate / PrefKeyQuality")]
     public const string PrefKey = PrefKeyDate;
 
@@ -69,7 +71,10 @@ public static class SessionHistoryFilter
     public const int MovementFilterBase = 1000;
 
     private static readonly MovementId[] LiveMovementScratch = new MovementId[32];
+    private static readonly BodyRegionId[] LiveRegionScratch = new BodyRegionId[16];
     private static HistoryFilterMode[] _exerciseModes;
+    private static HistoryFilterMode[] _regionModes;
+    private static HistoryFilterMode[] _allMovementModes;
 
     /// <summary>Dönem / tarih dropdown — sağ üst.</summary>
     public static readonly HistoryFilterMode[] DateModes =
@@ -106,10 +111,97 @@ public static class SessionHistoryFilter
         }
     }
 
+    /// <summary>Tümü + en az bir canlı hareketi olan bölgeler.</summary>
+    public static HistoryFilterMode[] RegionModes
+    {
+        get
+        {
+            if (_regionModes == null)
+                _regionModes = BuildRegionModes();
+            return _regionModes;
+        }
+    }
+
+    /// <summary>Tümü + tüm canlı hareketler (bölge seçilmeden).</summary>
+    public static HistoryFilterMode[] AllMovementModes
+    {
+        get
+        {
+            if (_allMovementModes == null)
+                _allMovementModes = BuildMovementModes(BodyRegionId.Shoulder, includeAllRegions: true);
+            return _allMovementModes;
+        }
+    }
+
     /// <summary>Editor / test: katalog değişince yeniden kur.</summary>
     public static void RebuildExerciseModes()
     {
         _exerciseModes = BuildExerciseModes();
+        _regionModes = BuildRegionModes();
+        _allMovementModes = null;
+    }
+
+    public static HistoryFilterMode ForRegion(BodyRegionId region)
+    {
+        switch (region)
+        {
+            case BodyRegionId.Shoulder: return HistoryFilterMode.RegionShoulder;
+            case BodyRegionId.Arm: return HistoryFilterMode.RegionArm;
+            case BodyRegionId.Elbow: return HistoryFilterMode.RegionElbow;
+            case BodyRegionId.Neck: return HistoryFilterMode.RegionNeck;
+            case BodyRegionId.Leg: return HistoryFilterMode.RegionLeg;
+            case BodyRegionId.Ankle: return HistoryFilterMode.RegionAnkle;
+            default: return HistoryFilterMode.All;
+        }
+    }
+
+    public static bool TryResolveRegion(HistoryFilterMode mode, out BodyRegionId region)
+    {
+        switch (mode)
+        {
+            case HistoryFilterMode.RegionShoulder: region = BodyRegionId.Shoulder; return true;
+            case HistoryFilterMode.RegionArm: region = BodyRegionId.Arm; return true;
+            case HistoryFilterMode.RegionElbow: region = BodyRegionId.Elbow; return true;
+            case HistoryFilterMode.RegionNeck: region = BodyRegionId.Neck; return true;
+            case HistoryFilterMode.RegionLeg: region = BodyRegionId.Leg; return true;
+            case HistoryFilterMode.RegionAnkle: region = BodyRegionId.Ankle; return true;
+            default: region = default; return false;
+        }
+    }
+
+    public static bool IsRegionMode(HistoryFilterMode mode)
+    {
+        return TryResolveRegion(mode, out _);
+    }
+
+  /// <summary>Seçili bölgeye göre hareket dropdown seçenekleri (Tümü + canlı hareketler).</summary>
+    public static HistoryFilterMode[] GetMovementModes(HistoryFilterMode regionMode)
+    {
+        if (regionMode == HistoryFilterMode.All || !TryResolveRegion(regionMode, out BodyRegionId region))
+            return AllMovementModes;
+        return BuildMovementModes(region, includeAllRegions: false);
+    }
+
+    private static HistoryFilterMode[] BuildRegionModes()
+    {
+        int liveCount = ExerciseCatalog.CopyLiveRegions(LiveRegionScratch);
+        var modes = new HistoryFilterMode[liveCount + 1];
+        modes[0] = HistoryFilterMode.All;
+        for (int i = 0; i < liveCount; i++)
+            modes[i + 1] = ForRegion(LiveRegionScratch[i]);
+        return modes;
+    }
+
+    private static HistoryFilterMode[] BuildMovementModes(BodyRegionId region, bool includeAllRegions)
+    {
+        int liveCount = includeAllRegions
+            ? ExerciseCatalog.CopyLiveMovements(LiveMovementScratch)
+            : ExerciseCatalog.CopyLiveMovementsForRegion(region, LiveMovementScratch);
+        var modes = new HistoryFilterMode[liveCount + 1];
+        modes[0] = HistoryFilterMode.All;
+        for (int i = 0; i < liveCount; i++)
+            modes[i + 1] = ForMovement(LiveMovementScratch[i]);
+        return modes;
     }
 
     private static HistoryFilterMode[] BuildExerciseModes()
@@ -180,7 +272,82 @@ public static class SessionHistoryFilter
     {
         dateMode = LoadMode(PrefKeyDate, DateModes);
         qualityMode = LoadMode(PrefKeyQuality, QualityModes);
-        exerciseMode = LoadMode(PrefKeyExercise, ExerciseModes);
+        LoadRegionMovementSaved(out HistoryFilterMode regionMode, out HistoryFilterMode movementMode);
+        exerciseMode = CombineRegionMovement(regionMode, movementMode);
+    }
+
+    public static void LoadRegionMovementSaved(
+        out HistoryFilterMode regionMode, out HistoryFilterMode movementMode)
+    {
+        regionMode = HistoryFilterMode.All;
+        movementMode = HistoryFilterMode.All;
+
+        if (PlayerPrefs.HasKey(PrefKeyRegion) || PlayerPrefs.HasKey(PrefKeyMovement))
+        {
+            regionMode = LoadMode(PrefKeyRegion, RegionModes);
+            movementMode = LoadMode(PrefKeyMovement, AllMovementModes);
+            if (movementMode != HistoryFilterMode.All && !MovementAllowedForRegion(regionMode, movementMode))
+                movementMode = HistoryFilterMode.All;
+            return;
+        }
+
+        HistoryFilterMode legacy = LoadMode(PrefKeyExercise, ExerciseModes);
+        SplitExerciseFilter(legacy, out regionMode, out movementMode);
+    }
+
+    public static void SaveRegion(HistoryFilterMode mode)
+    {
+        if (IndexOf(mode, RegionModes) < 0) mode = HistoryFilterMode.All;
+        PlayerPrefs.SetInt(PrefKeyRegion, (int)mode);
+        PlayerPrefs.Save();
+    }
+
+    public static void SaveMovement(HistoryFilterMode mode)
+    {
+        mode = MigrateExerciseMode(mode);
+        if (IndexOf(mode, AllMovementModes) < 0) mode = HistoryFilterMode.All;
+        PlayerPrefs.SetInt(PrefKeyMovement, (int)mode);
+        PlayerPrefs.Save();
+    }
+
+    public static void SplitExerciseFilter(
+        HistoryFilterMode combined,
+        out HistoryFilterMode regionMode,
+        out HistoryFilterMode movementMode)
+    {
+        regionMode = HistoryFilterMode.All;
+        movementMode = HistoryFilterMode.All;
+        if (combined == HistoryFilterMode.All) return;
+
+        combined = MigrateExerciseMode(combined);
+        if (IsRegionMode(combined))
+        {
+            regionMode = combined;
+            return;
+        }
+
+        if (TryResolveMovement(combined, out MovementId id))
+        {
+            movementMode = combined;
+            regionMode = ForRegion(ExerciseCatalog.GetOrDefault(id).RegionId);
+        }
+    }
+
+    public static HistoryFilterMode CombineRegionMovement(
+        HistoryFilterMode regionMode, HistoryFilterMode movementMode)
+    {
+        if (movementMode != HistoryFilterMode.All)
+            return movementMode;
+        return regionMode;
+    }
+
+    public static bool MovementAllowedForRegion(HistoryFilterMode regionMode, HistoryFilterMode movementMode)
+    {
+        if (movementMode == HistoryFilterMode.All) return true;
+        if (!TryResolveMovement(movementMode, out MovementId moveId)) return false;
+        if (regionMode == HistoryFilterMode.All) return true;
+        if (!TryResolveRegion(regionMode, out BodyRegionId region)) return false;
+        return ExerciseCatalog.GetOrDefault(moveId).RegionId == region;
     }
 
     public static void SaveDate(HistoryFilterMode mode)
@@ -228,33 +395,39 @@ public static class SessionHistoryFilter
 
     public static string ModeLabel(HistoryFilterMode mode)
     {
+        return ModeLabel(mode, LanguageSettings.Current);
+    }
+
+    public static string ModeLabel(HistoryFilterMode mode, AppLanguage lang)
+    {
         switch (mode)
         {
-            case HistoryFilterMode.Last7Days: return Loc.T("filter.week");
-            case HistoryFilterMode.Last30Days: return Loc.T("filter.month");
-            case HistoryFilterMode.Last90Days: return Loc.T("filter.quarter");
-            case HistoryFilterMode.Last5Sessions: return Loc.T("filter.last5");
-            case HistoryFilterMode.Last10Sessions: return Loc.T("filter.last10");
-            case HistoryFilterMode.Last20Sessions: return Loc.T("filter.last20");
-            case HistoryFilterMode.WithCompensation: return Loc.T("filter.withComp");
-            case HistoryFilterMode.NoCompensation: return Loc.T("filter.noComp");
-            case HistoryFilterMode.HighStrain: return Loc.T("filter.highStrain");
-            case HistoryFilterMode.IncompleteTarget: return Loc.T("filter.incomplete");
-            case HistoryFilterMode.RightArmMeasured: return Loc.T("filter.rightArm");
-            case HistoryFilterMode.LeftArmMeasured: return Loc.T("filter.leftArm");
-            case HistoryFilterMode.RegionShoulder: return Loc.T("filter.region.shoulder");
-            case HistoryFilterMode.RegionArm: return Loc.T("filter.region.arm");
-            case HistoryFilterMode.RegionElbow: return Loc.T("filter.region.elbow");
-            case HistoryFilterMode.RegionNeck: return Loc.T("filter.region.neck");
-            case HistoryFilterMode.RegionLeg: return Loc.T("filter.region.leg");
-            case HistoryFilterMode.RegionAnkle: return Loc.T("filter.region.ankle");
+            case HistoryFilterMode.All: return Loc.T("filter.all", lang);
+            case HistoryFilterMode.Last7Days: return Loc.T("filter.week", lang);
+            case HistoryFilterMode.Last30Days: return Loc.T("filter.month", lang);
+            case HistoryFilterMode.Last90Days: return Loc.T("filter.quarter", lang);
+            case HistoryFilterMode.Last5Sessions: return Loc.T("filter.last5", lang);
+            case HistoryFilterMode.Last10Sessions: return Loc.T("filter.last10", lang);
+            case HistoryFilterMode.Last20Sessions: return Loc.T("filter.last20", lang);
+            case HistoryFilterMode.WithCompensation: return Loc.T("filter.withComp", lang);
+            case HistoryFilterMode.NoCompensation: return Loc.T("filter.noComp", lang);
+            case HistoryFilterMode.HighStrain: return Loc.T("filter.highStrain", lang);
+            case HistoryFilterMode.IncompleteTarget: return Loc.T("filter.incomplete", lang);
+            case HistoryFilterMode.RightArmMeasured: return Loc.T("filter.rightArm", lang);
+            case HistoryFilterMode.LeftArmMeasured: return Loc.T("filter.leftArm", lang);
+            case HistoryFilterMode.RegionShoulder: return Loc.T("filter.region.shoulder", lang);
+            case HistoryFilterMode.RegionArm: return Loc.T("filter.region.arm", lang);
+            case HistoryFilterMode.RegionElbow: return Loc.T("filter.region.elbow", lang);
+            case HistoryFilterMode.RegionNeck: return Loc.T("filter.region.neck", lang);
+            case HistoryFilterMode.RegionLeg: return Loc.T("filter.region.leg", lang);
+            case HistoryFilterMode.RegionAnkle: return Loc.T("filter.region.ankle", lang);
             default:
                 if (TryResolveMovement(mode, out MovementId moveId))
                 {
                     ExerciseDefinition def = ExerciseCatalog.GetOrDefault(moveId);
-                    return Loc.T(def.LocKey);
+                    return Loc.T(def.LocKey, lang);
                 }
-                return Loc.T("filter.all");
+                return Loc.T("filter.all", lang);
         }
     }
 
@@ -315,6 +488,18 @@ public static class SessionHistoryFilter
         HistoryFilterMode qualityMode,
         HistoryFilterMode exerciseMode)
     {
+        SplitExerciseFilter(exerciseMode, out HistoryFilterMode regionMode, out HistoryFilterMode movementMode);
+        return Filter(history, dateMode, qualityMode, regionMode, movementMode);
+    }
+
+    /// <summary>Dönem ∩ kalite ∩ bölge ∩ hareket.</summary>
+    public static List<SessionEntry> Filter(
+        PatientHistory history,
+        HistoryFilterMode dateMode,
+        HistoryFilterMode qualityMode,
+        HistoryFilterMode regionMode,
+        HistoryFilterMode movementMode)
+    {
         List<SessionEntry> byDate = ApplySingle(history != null ? history.sessions : null, dateMode, isDatePass: true);
         var result = new List<SessionEntry>(byDate.Count);
         for (int i = 0; i < byDate.Count; i++)
@@ -322,7 +507,7 @@ public static class SessionHistoryFilter
             SessionEntry s = byDate[i];
             if (qualityMode != HistoryFilterMode.All && !PassesQuality(s, qualityMode))
                 continue;
-            if (exerciseMode != HistoryFilterMode.All && !PassesExercise(s, exerciseMode))
+            if (!PassesRegionAndMovement(s, regionMode, movementMode))
                 continue;
             result.Add(s);
         }
@@ -390,6 +575,18 @@ public static class SessionHistoryFilter
                 return ShowLeft(s) || s.leftCompletedReps > 0 || s.leftMaxROM > 0f;
             default: return true;
         }
+    }
+
+    private static bool PassesRegionAndMovement(
+        SessionEntry s, HistoryFilterMode regionMode, HistoryFilterMode movementMode)
+    {
+        if (regionMode == HistoryFilterMode.All && movementMode == HistoryFilterMode.All)
+            return true;
+        if (regionMode != HistoryFilterMode.All && !PassesExercise(s, regionMode))
+            return false;
+        if (movementMode != HistoryFilterMode.All && !PassesExercise(s, movementMode))
+            return false;
+        return true;
     }
 
     private static bool PassesExercise(SessionEntry s, HistoryFilterMode mode)

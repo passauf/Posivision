@@ -2,15 +2,22 @@ using UnityEngine;
 
 /// <summary>
 /// 2. kişi varlığı + yardımcı pose önbelleği + yakınlık uyarısı glue.
+/// 2. kişi: yalnızca güvenilir + hastadan ayrık yardımcı pose için uyarı.
 /// AssistedRepDetector ayrı kalır. SaMD Class B; teşhis değildir. Zero-allocation.
 /// </summary>
 public sealed class AssistPresenceTracker
 {
+    public const float DefaultMinShoulderSeparation01 = 0.07f;
+    public const float DefaultMinHelperShoulderWidth01 = 0.045f;
+    public const int DefaultSecondPersonMinFrames = 6;
+
     public struct Config
     {
         public bool warnOnSecondPerson;
         public int secondPersonMinFrames;
         public float secondPersonWarningCooldownSeconds;
+        public float minShoulderSeparation01;
+        public float minHelperShoulderWidth01;
         public bool enableConfidenceGate;
         public float landmarkVisibilityThreshold;
         public bool requirePresenceScore;
@@ -65,7 +72,7 @@ public sealed class AssistPresenceTracker
     public void CacheHelperPose(in PoseLandmarkSample sample, float invShoulderWidth)
     {
         _cachedAssistInvShoulderWidth = invShoulderWidth;
-        _cachedHasHelperPose = sample.hasHelperPose && sample.detectedPoseCount >= 2;
+        _cachedHasHelperPose = IsConfidentDistinctHelper(in sample);
         if (!_cachedHasHelperPose)
         {
             _cachedHelperPose = default;
@@ -88,14 +95,14 @@ public sealed class AssistPresenceTracker
     }
 
     /// <summary>
-    /// Sahnede 2+ pose → ekran uyarısı. SaMD Class B bilgilendirme; teşhis değildir.
+    /// Güvenilir ve hastadan ayrık 2. pose → ekran uyarısı. SaMD Class B bilgilendirme; teşhis değildir.
     /// </summary>
     public void UpdateSecondPersonPresence(
-        int poseCount,
+        in PoseLandmarkSample sample,
         WarningManager warningManager,
         SessionReportManager reportManager)
     {
-        if (poseCount >= 2)
+        if (IsConfidentDistinctHelper(in sample))
         {
             _secondPersonStreak++;
             if (!_config.warnOnSecondPerson) return;
@@ -138,6 +145,33 @@ public sealed class AssistPresenceTracker
             warningManager.TriggerWarning(Loc.T("warn.assistNear"));
     }
 
+    public bool IsConfidentDistinctHelper(in PoseLandmarkSample sample)
+    {
+        if (!sample.hasHelperPose || sample.detectedPoseCount < 2)
+            return false;
+
+        if (!IsPointConfident(sample.helperLeftShoulder)
+            || !IsPointConfident(sample.helperRightShoulder)
+            || !IsPointConfident(sample.helperLeftHip)
+            || !IsPointConfident(sample.helperRightHip))
+            return false;
+
+        float helperWidth = ShoulderWidth(sample.helperLeftShoulder, sample.helperRightShoulder);
+        float minWidth = Mathf.Max(0.02f, _config.minHelperShoulderWidth01);
+        if (helperWidth < minWidth)
+            return false;
+
+        if (!IsPointConfident(sample.leftShoulder) || !IsPointConfident(sample.rightShoulder))
+            return false;
+
+        Vector2 patientMid = MidPoint(sample.leftShoulder, sample.rightShoulder);
+        Vector2 helperMid = MidPoint(sample.helperLeftShoulder, sample.helperRightShoulder);
+        float minSep = Mathf.Max(0.03f, _config.minShoulderSeparation01);
+        float dx = patientMid.x - helperMid.x;
+        float dy = patientMid.y - helperMid.y;
+        return (dx * dx + dy * dy) >= minSep * minSep;
+    }
+
     private AssistedLandmark ToAssistedLandmark(LandmarkPoint p)
     {
         AssistedLandmark a;
@@ -154,5 +188,17 @@ public sealed class AssistPresenceTracker
         if (p.hasVisibility && p.visibility < thr) return false;
         if (_config.requirePresenceScore && p.hasPresence && p.presence < thr) return false;
         return true;
+    }
+
+    private static Vector2 MidPoint(LandmarkPoint a, LandmarkPoint b)
+    {
+        return new Vector2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+    }
+
+    private static float ShoulderWidth(LandmarkPoint left, LandmarkPoint right)
+    {
+        float dx = left.x - right.x;
+        float dy = left.y - right.y;
+        return Mathf.Sqrt(dx * dx + dy * dy);
     }
 }

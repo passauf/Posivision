@@ -329,6 +329,12 @@ public static class ExerciseCatalog
         return !AllowsSimultaneousBilateral(id);
     }
 
+    /// <summary>Yan profil + tek kol (omuz fleksiyonu).</summary>
+    public static bool IsExclusiveSideProfile(MovementId id)
+    {
+        return UsesSideProfile(id) && RequiresExclusiveArm(id);
+    }
+
     public static MovementRaisePlane GetRaisePlane(MovementId id)
     {
         return GetOrDefault(id).RaisePlane;
@@ -409,6 +415,39 @@ public static class ExerciseCatalog
         {
             if (All[i].Implemented)
                 buffer[n++] = All[i].MovementId;
+        }
+        return n;
+    }
+
+    /// <summary>Implemented=true ve bölgeye ait hareketleri buffer'a yazar.</summary>
+    public static int CopyLiveMovementsForRegion(BodyRegionId region, MovementId[] buffer)
+    {
+        if (buffer == null) return 0;
+        int n = 0;
+        for (int i = 0; i < All.Length && n < buffer.Length; i++)
+        {
+            if (All[i].Implemented && All[i].RegionId == region)
+                buffer[n++] = All[i].MovementId;
+        }
+        return n;
+    }
+
+    /// <summary>En az bir canlı hareketi olan bölgeleri buffer'a yazar.</summary>
+    public static int CopyLiveRegions(BodyRegionId[] buffer)
+    {
+        if (buffer == null) return 0;
+        int n = 0;
+        for (int r = 0; r <= (int)BodyRegionId.Ankle && n < buffer.Length; r++)
+        {
+            var region = (BodyRegionId)r;
+            for (int i = 0; i < All.Length; i++)
+            {
+                if (All[i].Implemented && All[i].RegionId == region)
+                {
+                    buffer[n++] = region;
+                    break;
+                }
+            }
         }
         return n;
     }

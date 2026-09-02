@@ -156,4 +156,26 @@ public static class PoseScaleResolver
 
         return 0f;
     }
+
+    /// <summary>
+    /// Yan profil tek kol: yalnızca çalışan taraftaki omuz–kalça (görünmeyen kol hesaba katılmaz).
+    /// </summary>
+    public static float ComputeIpsilateralTorsoLength(
+        Vector2 shoulder,
+        Vector2 hip,
+        bool shoulderOk,
+        bool hipOk,
+        out bool valid)
+    {
+        valid = false;
+        if (!shoulderOk || !hipOk)
+            return 0f;
+
+        float len = Vector2.Distance(shoulder, hip);
+        if (len <= MinScale)
+            return 0f;
+
+        valid = true;
+        return len;
+    }
 }

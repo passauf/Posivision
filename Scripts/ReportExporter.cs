@@ -605,9 +605,20 @@ public static class ReportExporter
         HistoryFilterMode exerciseFilter,
         int plannedSessionsPerWeek)
     {
+        SessionHistoryFilter.SplitExerciseFilter(
+            exerciseFilter, out HistoryFilterMode regionFilter, out HistoryFilterMode movementFilter);
+        return ExportProgress(history, profile, dateFilter, qualityFilter, regionFilter, movementFilter, plannedSessionsPerWeek);
+    }
+
+    public static string ExportProgress(
+        PatientHistory history, PatientProfile profile,
+        HistoryFilterMode dateFilter, HistoryFilterMode qualityFilter,
+        HistoryFilterMode regionFilter, HistoryFilterMode movementFilter,
+        int plannedSessionsPerWeek)
+    {
         history = PatientVault.FilterHistoryForPatient(history, profile);
         string htmlPath = ProgressReportHtml.Build(
-            history, profile, dateFilter, qualityFilter, exerciseFilter, plannedSessionsPerWeek);
+            history, profile, dateFilter, qualityFilter, regionFilter, movementFilter, plannedSessionsPerWeek);
         if (string.IsNullOrEmpty(htmlPath)) return null;
 
         string dir = Path.GetDirectoryName(htmlPath);

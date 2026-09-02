@@ -147,6 +147,7 @@ public static class Loc
             case "filter.move.shoulderAbduction": return "Omuz abdüksiyonu";
             case "filter.label": return "Kalite";
             case "filter.date": return "Dönem";
+            case "filter.region": return "Bölge";
             case "filter.quality": return "Kalite";
             case "progress.need2": return "≥2 seans";
             case "progress.split": return "Sağ:{0}  Sol:{1}";
@@ -787,6 +788,7 @@ public static class Loc
             case "filter.move.shoulderAbduction": return "Shoulder abduction";
             case "filter.label": return "Quality";
             case "filter.date": return "Period";
+            case "filter.region": return "Region";
             case "filter.quality": return "Quality";
             case "progress.need2": return "≥2 sessions";
             case "progress.split": return "R:{0}  L:{1}";

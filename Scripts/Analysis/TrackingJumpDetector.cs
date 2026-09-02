@@ -2,8 +2,7 @@ using UnityEngine;
 
 /// <summary>
 /// Kadraj/takip sıçraması: eklem teleport + protokol ölçek sıçraması.
-/// Ölçek birimi: ön = omuz genişliği, yan = gövde boyu (PoseScaleResolver).
-/// Eşikler: ≥0.45 ölçek birimi / eklem, ≥3 eklem; ölçek oranı ≥1.55.
+/// Karşılaştırma normalize ÖNCESİ görüntü (0–1) uzayında — ölçek titremesi yanlış pozitif üretmez.
 /// SaMD Class B kalite uyarısı; teşhis değildir. Zero-allocation hot path.
 /// </summary>
 public sealed class TrackingJumpDetector
@@ -21,24 +20,30 @@ public sealed class TrackingJumpDetector
     public const float DefaultDeltaScaleUnits = 0.45f;
     public const int DefaultMinJoints = 3;
     public const float DefaultScaleRatio = 1.55f;
+    private const float DefaultFallbackScale01 = 0.15f;
+    private const float ScaleEmaAlpha = 0.22f;
+    private const float ExtremeScaleRatio = 2.25f;
 
     public struct Config
     {
         public bool enabled;
-        /// <summary>Ölçek biriminde eklem teleport eşiği (varsayılan 0.45).</summary>
+        /// <summary>Ölçek biriminde eklem teleport eşiği (görüntü uzayına çarpılır).</summary>
         public float deltaScaleUnits;
-        /// <summary>Aynı karede bu kadar eklem eşiği aşarsa sıçrama (varsayılan 3).</summary>
+        /// <summary>Aynı karede bu kadar eklem eşiği aşarsa sıçrama.</summary>
         public int minJoints;
-        /// <summary>Ölçek uzunluğu kareler arası oran üst sınırı (varsayılan 1.55).</summary>
+        /// <summary>EMA ölçek oranı üst sınırı (orta düzey; eklem hareketi ile birlikte).</summary>
         public float scaleRatio;
         public float warningCooldownSeconds;
+        /// <summary>Yan profil tek kol: bilek sıçraması sayılmaz.</summary>
+        public bool excludeWrists;
     }
 
     private Config _config;
-    private readonly Vector2[] _prevNormXy = new Vector2[LandmarkSlotCount];
-    private readonly bool[] _prevNormValid = new bool[LandmarkSlotCount];
+    private readonly Vector2[] _prevImageXy = new Vector2[LandmarkSlotCount];
+    private readonly bool[] _prevImageValid = new bool[LandmarkSlotCount];
     private float _prevTimestamp = -1f;
-    private float _prevRawScaleLength;
+    private float _prevEmaScaleLength;
+    private float _emaScaleLength;
     private float _lastWarnTime = -100f;
 
     public void Configure(in Config config)
@@ -49,20 +54,20 @@ public sealed class TrackingJumpDetector
     public void Reset()
     {
         _prevTimestamp = -1f;
-        _prevRawScaleLength = 0f;
+        _prevEmaScaleLength = 0f;
+        _emaScaleLength = 0f;
         for (int i = 0; i < LandmarkSlotCount; i++)
-            _prevNormValid[i] = false;
+            _prevImageValid[i] = false;
     }
 
     /// <summary>
     /// true = bu karede sıçrama; açı job atlanmalı.
-    /// rawScaleLength: normalize öncesi protokol ölçeği (ön: omuz w, yan: torso L).
-    /// filteredXy: normalize sonrası XY (ölçek biriminde).
+    /// imageXy: One Euro sonrası, normalize ÖNCESİ görüntü (0–1) koordinatları.
     /// </summary>
     public bool Evaluate(
         float timestamp,
         float rawScaleLength,
-        Vector2[] filteredXy,
+        Vector2[] imageXy,
         bool mpRightOk,
         bool mpLeftOk,
         bool mpRightWristOk,
@@ -74,38 +79,48 @@ public sealed class TrackingJumpDetector
         WarningManager warningManager)
     {
         bool jumped = false;
+        int jumpJoints = 0;
+        int compared = 0;
 
-        if (_config.enabled && _prevTimestamp > 0f && filteredXy != null)
+        if (_config.enabled && _prevTimestamp > 0f && imageXy != null)
         {
             float dt = timestamp - _prevTimestamp;
             if (dt > 1e-4f && dt < 0.20f)
             {
-                float thresh = Mathf.Max(0.15f, _config.deltaScaleUnits);
+                float scaleForThresh = rawScaleLength > PoseScaleResolver.MinScale
+                    ? rawScaleLength
+                    : (_prevEmaScaleLength > PoseScaleResolver.MinScale
+                        ? _prevEmaScaleLength
+                        : DefaultFallbackScale01);
+                float thresh = Mathf.Max(0.035f, _config.deltaScaleUnits * scaleForThresh);
                 float threshSq = thresh * thresh;
-                int jumpJoints = 0;
-                int compared = 0;
 
-                CountJointJump(IdxLeftShoulder, leftShoulderOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxRightShoulder, rightShoulderOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxLeftElbow, mpLeftOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxRightElbow, mpRightOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxLeftWrist, mpLeftOk && mpLeftWristOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxRightWrist, mpRightOk && mpRightWristOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxLeftHip, mpLeftOk || torsoOk, filteredXy, threshSq, ref jumpJoints, ref compared);
-                CountJointJump(IdxRightHip, mpRightOk || torsoOk, filteredXy, threshSq, ref jumpJoints, ref compared);
+                CountJointJump(IdxLeftShoulder, leftShoulderOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                CountJointJump(IdxRightShoulder, rightShoulderOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                CountJointJump(IdxLeftElbow, mpLeftOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                CountJointJump(IdxRightElbow, mpRightOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                if (!_config.excludeWrists)
+                {
+                    CountJointJump(IdxLeftWrist, mpLeftOk && mpLeftWristOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                    CountJointJump(IdxRightWrist, mpRightOk && mpRightWristOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                }
+                CountJointJump(IdxLeftHip, mpLeftOk || torsoOk, imageXy, threshSq, ref jumpJoints, ref compared);
+                CountJointJump(IdxRightHip, mpRightOk || torsoOk, imageXy, threshSq, ref jumpJoints, ref compared);
 
                 int minJoints = Mathf.Max(1, _config.minJoints);
                 if (compared >= minJoints && jumpJoints >= minJoints)
                     jumped = true;
 
-                // Ölçek sıçraması — yan profilde gövde boyu; ön profilde omuz genişliği
+                // Ölçek sıçraması — EMA ile yumuşatılmış; yalnız ölçek titremesi uyarı üretmez
                 if (!jumped
-                    && rawScaleLength > PoseScaleResolver.MinScale
-                    && _prevRawScaleLength > PoseScaleResolver.MinScale)
+                    && _emaScaleLength > PoseScaleResolver.MinScale
+                    && _prevEmaScaleLength > PoseScaleResolver.MinScale)
                 {
-                    float ratio = rawScaleLength / _prevRawScaleLength;
-                    float limit = Mathf.Max(1.15f, _config.scaleRatio);
-                    if (ratio >= limit || ratio <= 1f / limit)
+                    float ratio = _emaScaleLength / _prevEmaScaleLength;
+                    float limit = Mathf.Max(1.25f, _config.scaleRatio);
+                    bool moderate = ratio >= limit || ratio <= 1f / limit;
+                    bool extreme = ratio >= ExtremeScaleRatio || ratio <= 1f / ExtremeScaleRatio;
+                    if (extreme || (moderate && jumpJoints >= 2))
                         jumped = true;
                 }
             }
@@ -125,20 +140,20 @@ public sealed class TrackingJumpDetector
         }
 
         StoreReference(
-            timestamp, rawScaleLength, filteredXy,
+            timestamp, rawScaleLength, imageXy,
             mpRightOk, mpLeftOk, mpRightWristOk, mpLeftWristOk,
             leftShoulderOk, rightShoulderOk, torsoOk);
         return false;
     }
 
     private void CountJointJump(
-        int idx, bool currentOk, Vector2[] filteredXy, float threshSq,
+        int idx, bool currentOk, Vector2[] imageXy, float threshSq,
         ref int jumpJoints, ref int compared)
     {
-        if (!currentOk || !_prevNormValid[idx]) return;
+        if (!currentOk || !_prevImageValid[idx]) return;
         compared++;
-        Vector2 cur = filteredXy[idx];
-        Vector2 prev = _prevNormXy[idx];
+        Vector2 cur = imageXy[idx];
+        Vector2 prev = _prevImageXy[idx];
         float dx = cur.x - prev.x;
         float dy = cur.y - prev.y;
         if ((dx * dx + dy * dy) >= threshSq)
@@ -148,7 +163,7 @@ public sealed class TrackingJumpDetector
     private void StoreReference(
         float timestamp,
         float rawScaleLength,
-        Vector2[] filteredXy,
+        Vector2[] imageXy,
         bool mpRightOk,
         bool mpLeftOk,
         bool mpRightWristOk,
@@ -158,28 +173,42 @@ public sealed class TrackingJumpDetector
         bool torsoOk)
     {
         _prevTimestamp = timestamp;
-        _prevRawScaleLength = rawScaleLength > PoseScaleResolver.MinScale
-            ? rawScaleLength
-            : _prevRawScaleLength;
+
+        if (rawScaleLength > PoseScaleResolver.MinScale)
+        {
+            if (_emaScaleLength <= PoseScaleResolver.MinScale)
+            {
+                _emaScaleLength = rawScaleLength;
+                _prevEmaScaleLength = rawScaleLength;
+            }
+            else
+            {
+                _prevEmaScaleLength = _emaScaleLength;
+                _emaScaleLength = Mathf.Lerp(_emaScaleLength, rawScaleLength, ScaleEmaAlpha);
+            }
+        }
 
         for (int i = 0; i < LandmarkSlotCount; i++)
-            _prevNormValid[i] = false;
+            _prevImageValid[i] = false;
 
-        if (filteredXy == null) return;
-        StoreJoint(IdxLeftShoulder, leftShoulderOk, filteredXy);
-        StoreJoint(IdxRightShoulder, rightShoulderOk, filteredXy);
-        StoreJoint(IdxLeftElbow, mpLeftOk, filteredXy);
-        StoreJoint(IdxRightElbow, mpRightOk, filteredXy);
-        StoreJoint(IdxLeftWrist, mpLeftOk && mpLeftWristOk, filteredXy);
-        StoreJoint(IdxRightWrist, mpRightOk && mpRightWristOk, filteredXy);
-        StoreJoint(IdxLeftHip, mpLeftOk || torsoOk, filteredXy);
-        StoreJoint(IdxRightHip, mpRightOk || torsoOk, filteredXy);
+        if (imageXy == null) return;
+        StoreJoint(IdxLeftShoulder, leftShoulderOk, imageXy);
+        StoreJoint(IdxRightShoulder, rightShoulderOk, imageXy);
+        StoreJoint(IdxLeftElbow, mpLeftOk, imageXy);
+        StoreJoint(IdxRightElbow, mpRightOk, imageXy);
+        if (!_config.excludeWrists)
+        {
+            StoreJoint(IdxLeftWrist, mpLeftOk && mpLeftWristOk, imageXy);
+            StoreJoint(IdxRightWrist, mpRightOk && mpRightWristOk, imageXy);
+        }
+        StoreJoint(IdxLeftHip, mpLeftOk || torsoOk, imageXy);
+        StoreJoint(IdxRightHip, mpRightOk || torsoOk, imageXy);
     }
 
-    private void StoreJoint(int idx, bool ok, Vector2[] filteredXy)
+    private void StoreJoint(int idx, bool ok, Vector2[] imageXy)
     {
         if (!ok) return;
-        _prevNormXy[idx] = filteredXy[idx];
-        _prevNormValid[idx] = true;
+        _prevImageXy[idx] = imageXy[idx];
+        _prevImageValid[idx] = true;
     }
 }

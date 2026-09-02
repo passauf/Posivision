@@ -59,8 +59,12 @@ public static class MenuUiBuilder
         public TextMeshProUGUI dateFilterLabel;
         public TMP_Dropdown filterDropdown;
         public TextMeshProUGUI filterLabel;
+        public TMP_Dropdown regionFilterDropdown;
+        public TextMeshProUGUI regionFilterLabel;
         public TMP_Dropdown exerciseFilterDropdown;
         public TextMeshProUGUI exerciseFilterLabel;
+        public TMP_Dropdown movementFilterDropdown;
+        public TextMeshProUGUI movementFilterLabel;
         public Toggle toggleRight;
         public Toggle toggleLeft;
         public Toggle toggleAvg;
@@ -100,8 +104,16 @@ public static class MenuUiBuilder
 
         ui.filterLabel = FindTmp(canvasTf, "Content/FilterRow/FilterLabel");
         ui.filterDropdown = FindDropdown(canvasTf, "Content/FilterRow/QualityFilterDropdown");
+        ui.regionFilterLabel = FindTmp(canvasTf, "Content/FilterRow/RegionFilterLabel");
+        ui.regionFilterDropdown = FindDropdown(canvasTf, "Content/FilterRow/RegionFilterDropdown");
         ui.exerciseFilterLabel = FindTmp(canvasTf, "Content/FilterRow/ExerciseFilterLabel");
         ui.exerciseFilterDropdown = FindDropdown(canvasTf, "Content/FilterRow/ExerciseFilterDropdown");
+        ui.movementFilterLabel = FindTmp(canvasTf, "Content/FilterRow/MovementFilterLabel");
+        ui.movementFilterDropdown = FindDropdown(canvasTf, "Content/FilterRow/MovementFilterDropdown");
+        if (ui.movementFilterDropdown == null)
+            ui.movementFilterDropdown = ui.exerciseFilterDropdown;
+        if (ui.movementFilterLabel == null)
+            ui.movementFilterLabel = ui.exerciseFilterLabel;
 
         ui.graphTitle = FindTmp(canvasTf, "Content/Middle/GraphPanel/GraphTitle");
         ui.graphLegend = FindTmp(canvasTf, "Content/Middle/GraphPanel/Legend");

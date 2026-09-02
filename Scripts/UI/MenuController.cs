@@ -21,6 +21,8 @@ public class MenuController : MonoBehaviour
     private bool _built;
     private HistoryFilterMode _dateFilter = HistoryFilterMode.All;
     private HistoryFilterMode _qualityFilter = HistoryFilterMode.All;
+    private HistoryFilterMode _regionFilter = HistoryFilterMode.All;
+    private HistoryFilterMode _movementFilter = HistoryFilterMode.All;
     private HistoryFilterMode _exerciseFilter = HistoryFilterMode.All;
     private List<SessionEntry> _filtered = new List<SessionEntry>(32);
     private PatientHistory _lastHistory;
@@ -59,6 +61,7 @@ public class MenuController : MonoBehaviour
         ApplyMenuThemeColors();
 
         SessionHistoryFilter.LoadSaved(out _dateFilter, out _qualityFilter, out _exerciseFilter);
+        SessionHistoryFilter.LoadRegionMovementSaved(out _regionFilter, out _movementFilter);
 
         _ui.startButton.onClick.AddListener(StartExercise);
         if (_ui.openHtmlButton != null)
@@ -94,6 +97,8 @@ public class MenuController : MonoBehaviour
         if (migrated > 0)
             Debug.Log(Loc.Format("vault.migrated", migrated));
 
+        EnsureRegionMovementFilterUi();
+
         if (_ui.dateFilterDropdown != null)
         {
             _ui.dateFilterDropdown.SetValueWithoutNotify(
@@ -106,11 +111,19 @@ public class MenuController : MonoBehaviour
                 Mathf.Max(0, SessionHistoryFilter.IndexOf(_qualityFilter, SessionHistoryFilter.QualityModes)));
             _ui.filterDropdown.onValueChanged.AddListener(OnQualityFilterChanged);
         }
-        if (_ui.exerciseFilterDropdown != null)
+        if (_ui.regionFilterDropdown != null)
         {
-            _ui.exerciseFilterDropdown.SetValueWithoutNotify(
-                Mathf.Max(0, SessionHistoryFilter.IndexOf(_exerciseFilter, SessionHistoryFilter.ExerciseModes)));
-            _ui.exerciseFilterDropdown.onValueChanged.AddListener(OnExerciseFilterChanged);
+            _ui.regionFilterDropdown.SetValueWithoutNotify(
+                Mathf.Max(0, SessionHistoryFilter.IndexOf(_regionFilter, SessionHistoryFilter.RegionModes)));
+            _ui.regionFilterDropdown.onValueChanged.AddListener(OnRegionFilterChanged);
+        }
+        if (_ui.movementFilterDropdown != null)
+        {
+            RefreshMovementFilterDropdownOptions();
+            _ui.movementFilterDropdown.SetValueWithoutNotify(
+                Mathf.Max(0, SessionHistoryFilter.IndexOf(
+                    _movementFilter, SessionHistoryFilter.GetMovementModes(_regionFilter))));
+            _ui.movementFilterDropdown.onValueChanged.AddListener(OnMovementFilterChanged);
         }
 
         if (_ui.toggleRight != null) _ui.toggleRight.onValueChanged.AddListener(_ => OnGraphToggle());
@@ -160,11 +173,82 @@ public class MenuController : MonoBehaviour
         Refresh();
     }
 
-    private void OnExerciseFilterChanged(int index)
+    private void OnRegionFilterChanged(int index)
     {
-        _exerciseFilter = SessionHistoryFilter.FromIndex(index, SessionHistoryFilter.ExerciseModes);
-        SessionHistoryFilter.SaveExercise(_exerciseFilter);
+        _regionFilter = SessionHistoryFilter.FromIndex(index, SessionHistoryFilter.RegionModes);
+        SessionHistoryFilter.SaveRegion(_regionFilter);
+        if (!SessionHistoryFilter.MovementAllowedForRegion(_regionFilter, _movementFilter))
+        {
+            _movementFilter = HistoryFilterMode.All;
+            SessionHistoryFilter.SaveMovement(_movementFilter);
+        }
+        RefreshMovementFilterDropdownOptions();
+        SyncMovementFilterDropdown();
+        SyncExerciseFilterCombined();
         Refresh();
+    }
+
+    private void OnMovementFilterChanged(int index)
+    {
+        HistoryFilterMode[] modes = SessionHistoryFilter.GetMovementModes(_regionFilter);
+        _movementFilter = SessionHistoryFilter.FromIndex(index, modes);
+        SessionHistoryFilter.SaveMovement(_movementFilter);
+        SyncExerciseFilterCombined();
+        Refresh();
+    }
+
+    private void SyncExerciseFilterCombined()
+    {
+        _exerciseFilter = SessionHistoryFilter.CombineRegionMovement(_regionFilter, _movementFilter);
+        SessionHistoryFilter.SaveExercise(_exerciseFilter);
+    }
+
+    private void EnsureRegionMovementFilterUi()
+    {
+        if (_ui == null) return;
+        if (_ui.regionFilterDropdown != null) return;
+        if (_ui.movementFilterDropdown == null && _ui.exerciseFilterDropdown == null) return;
+
+        if (_ui.movementFilterDropdown == null)
+        {
+            _ui.movementFilterDropdown = _ui.exerciseFilterDropdown;
+            _ui.movementFilterLabel = _ui.exerciseFilterLabel;
+        }
+
+        TMP_Dropdown template = _ui.movementFilterDropdown;
+        TextMeshProUGUI templateLabel = _ui.movementFilterLabel;
+        if (template == null || templateLabel == null) return;
+
+        Transform row = template.transform.parent;
+        if (row == null) return;
+
+        var regionLabelGo = Object.Instantiate(templateLabel.gameObject, row);
+        regionLabelGo.name = "RegionFilterLabel";
+        _ui.regionFilterLabel = regionLabelGo.GetComponent<TextMeshProUGUI>();
+        regionLabelGo.transform.SetSiblingIndex(templateLabel.transform.GetSiblingIndex());
+
+        var regionDdGo = Object.Instantiate(template.gameObject, row);
+        regionDdGo.name = "RegionFilterDropdown";
+        _ui.regionFilterDropdown = regionDdGo.GetComponent<TMP_Dropdown>();
+        regionDdGo.transform.SetSiblingIndex(template.transform.GetSiblingIndex());
+
+        template.gameObject.name = "MovementFilterDropdown";
+        templateLabel.gameObject.name = "MovementFilterLabel";
+    }
+
+    private void RefreshMovementFilterDropdownOptions()
+    {
+        HistoryFilterMode[] modes = SessionHistoryFilter.GetMovementModes(_regionFilter);
+        FillDropdown(_ui.movementFilterDropdown, modes, _movementFilter);
+    }
+
+    private void SyncMovementFilterDropdown()
+    {
+        if (_ui.movementFilterDropdown == null) return;
+        HistoryFilterMode[] modes = SessionHistoryFilter.GetMovementModes(_regionFilter);
+        int idx = Mathf.Max(0, SessionHistoryFilter.IndexOf(_movementFilter, modes));
+        _ui.movementFilterDropdown.SetValueWithoutNotify(idx);
+        _ui.movementFilterDropdown.RefreshShownValue();
     }
 
     private void Start()
@@ -344,7 +428,8 @@ public class MenuController : MonoBehaviour
         SetText(_ui.editPatientButtonLabel, Loc.T("picker.edit"));
         SetText(_ui.dateFilterLabel, Loc.T("filter.date"));
         SetText(_ui.filterLabel, Loc.T("filter.quality"));
-        SetText(_ui.exerciseFilterLabel, Loc.T("filter.exercise"));
+        SetText(_ui.regionFilterLabel, Loc.T("filter.region"));
+        SetText(_ui.movementFilterLabel, Loc.T("filter.exercise"));
         RefreshFilterDropdownOptions();
         SetText(_ui.toggleRightLbl, Loc.T("menu.toggle.right"));
         SetText(_ui.toggleLeftLbl, Loc.T("menu.toggle.left"));
@@ -356,7 +441,8 @@ public class MenuController : MonoBehaviour
     {
         FillDropdown(_ui.dateFilterDropdown, SessionHistoryFilter.DateModes, _dateFilter);
         FillDropdown(_ui.filterDropdown, SessionHistoryFilter.QualityModes, _qualityFilter);
-        FillDropdown(_ui.exerciseFilterDropdown, SessionHistoryFilter.ExerciseModes, _exerciseFilter);
+        FillDropdown(_ui.regionFilterDropdown, SessionHistoryFilter.RegionModes, _regionFilter);
+        RefreshMovementFilterDropdownOptions();
     }
 
     private static void FillDropdown(TMP_Dropdown dropdown, HistoryFilterMode[] modes, HistoryFilterMode current)
@@ -396,7 +482,7 @@ public class MenuController : MonoBehaviour
         PatientProfile profile = dataManager.LoadProfile();
         bool hasPatient = profile != null && !string.IsNullOrWhiteSpace(profile.firstName);
         _lastHistory = PatientVault.FilterHistoryForPatient(raw, profile, fallbackToAll: !hasPatient);
-        _filtered = SessionHistoryFilter.Filter(_lastHistory, _dateFilter, _qualityFilter, _exerciseFilter);
+        _filtered = SessionHistoryFilter.Filter(_lastHistory, _dateFilter, _qualityFilter, _regionFilter, _movementFilter);
         SyncFilterDropdowns();
         UpdateCards(_lastHistory, _filtered);
         UpdateHistoryList(_filtered);
@@ -409,7 +495,8 @@ public class MenuController : MonoBehaviour
     {
         SyncOne(_ui.dateFilterDropdown, SessionHistoryFilter.DateModes, _dateFilter);
         SyncOne(_ui.filterDropdown, SessionHistoryFilter.QualityModes, _qualityFilter);
-        SyncOne(_ui.exerciseFilterDropdown, SessionHistoryFilter.ExerciseModes, _exerciseFilter);
+        SyncOne(_ui.regionFilterDropdown, SessionHistoryFilter.RegionModes, _regionFilter);
+        SyncOne(_ui.movementFilterDropdown, SessionHistoryFilter.GetMovementModes(_regionFilter), _movementFilter);
     }
 
     private static void SyncOne(TMP_Dropdown dropdown, HistoryFilterMode[] modes, HistoryFilterMode current)
@@ -756,7 +843,7 @@ public class MenuController : MonoBehaviour
             PatientProfile profile = dataManager.LoadProfile();
             int planned = ReportExporter.ResolvePlannedSessionsPerWeek(dataManager, profile, history);
             string path = ReportExporter.ExportProgress(
-                history, profile, _dateFilter, _qualityFilter, _exerciseFilter, planned);
+                history, profile, _dateFilter, _qualityFilter, _regionFilter, _movementFilter, planned);
             if (string.IsNullOrEmpty(path) || !ReportExporter.TryOpenProgressReportWithSessions(path, profile))
                 Debug.LogWarning(Loc.T("vault.openFailed"));
         }, reportOpenMode: true);

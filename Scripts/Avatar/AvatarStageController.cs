@@ -358,8 +358,9 @@ public class AvatarStageController : MonoBehaviour
                 break;
         }
 
-        // Karşı taraf: mevcut orbit yönünün aynası
-        if (mirrorAvatarCameraSide)
+        // Ön görünüm: laptop ön kamerası ile sol/sağ uyumu. Yan profil orbit'te aynalama yok —
+        // çalışan kol tarafı doğrudan SideOrbitMode ile seçilir.
+        if (mirrorAvatarCameraSide && _sideOrbitMode == SideOrbitMode.Front)
             camOffset = -camOffset;
 
         _avatarCamera.transform.position = center + Vector3.up * yOff + camOffset;

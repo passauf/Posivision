@@ -232,6 +232,24 @@ public class PreSessionPositionGuide : MonoBehaviour
         return true;
     }
 
+    private void RefreshFlexionPreSessionCamera()
+    {
+        if (_analyzer == null)
+            _analyzer = FindObjectOfType<PhysioAnalyzer>(true);
+        if (_stage == null)
+            _stage = FindObjectOfType<AvatarStageController>(true);
+        if (_analyzer == null || _stage == null) return;
+        if (_analyzer.IsSessionRunning) return;
+
+        bool side = ResolveSideProtocol();
+        bool right = _analyzer.IsMeasuringRightArm;
+        bool left = _analyzer.IsMeasuringLeftArm;
+        if (!right && !left) { right = true; left = false; }
+        if (side && right && left) left = false;
+
+        _stage.ApplySideOrbitForMeasuredArm(right, left, side);
+    }
+
     private void UpdateCountdown()
     {
         if (!IsPatientCentered())
@@ -316,7 +334,10 @@ public class PreSessionPositionGuide : MonoBehaviour
         _lastCountdownShown = -1;
 
         if (_stage != null)
+        {
             _stage.SetWebcamFullscreen(true);
+            RefreshFlexionPreSessionCamera();
+        }
 
         if (_root != null) _root.gameObject.SetActive(true);
         if (_countdownRoot != null) _countdownRoot.SetActive(false);

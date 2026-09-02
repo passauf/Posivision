@@ -17,7 +17,7 @@ public static class ProgressReportHtml
         PatientHistory history, PatientProfile profile,
         HistoryFilterMode dateFilter, HistoryFilterMode qualityFilter)
     {
-        return Build(history, profile, dateFilter, qualityFilter, HistoryFilterMode.All, plannedSessionsPerWeek: 0);
+        return Build(history, profile, dateFilter, qualityFilter, HistoryFilterMode.All, HistoryFilterMode.All, plannedSessionsPerWeek: 0);
     }
 
     public static string Build(
@@ -25,13 +25,24 @@ public static class ProgressReportHtml
         HistoryFilterMode dateFilter, HistoryFilterMode qualityFilter,
         int plannedSessionsPerWeek)
     {
-        return Build(history, profile, dateFilter, qualityFilter, HistoryFilterMode.All, plannedSessionsPerWeek);
+        return Build(history, profile, dateFilter, qualityFilter, HistoryFilterMode.All, HistoryFilterMode.All, plannedSessionsPerWeek);
     }
 
     public static string Build(
         PatientHistory history, PatientProfile profile,
         HistoryFilterMode dateFilter, HistoryFilterMode qualityFilter,
         HistoryFilterMode exerciseFilter,
+        int plannedSessionsPerWeek)
+    {
+        SessionHistoryFilter.SplitExerciseFilter(
+            exerciseFilter, out HistoryFilterMode regionFilter, out HistoryFilterMode movementFilter);
+        return Build(history, profile, dateFilter, qualityFilter, regionFilter, movementFilter, plannedSessionsPerWeek);
+    }
+
+    public static string Build(
+        PatientHistory history, PatientProfile profile,
+        HistoryFilterMode dateFilter, HistoryFilterMode qualityFilter,
+        HistoryFilterMode regionFilter, HistoryFilterMode movementFilter,
         int plannedSessionsPerWeek)
     {
         if (history == null || history.sessions == null || history.sessions.Count == 0) return null;
@@ -75,7 +86,9 @@ public static class ProgressReportHtml
         sb.Append("<div class=\"toggles filter-bar\">");
         AppendSelect(sb, "date-select", "filter.date", SessionHistoryFilter.DateModes, dateFilter, "setDateFilter");
         AppendSelect(sb, "quality-select", "filter.quality", SessionHistoryFilter.QualityModes, qualityFilter, "setQualityFilter");
-        AppendSelect(sb, "exercise-select", "filter.exercise", SessionHistoryFilter.ExerciseModes, exerciseFilter, "setExerciseFilter");
+        AppendSelect(sb, "region-select", "filter.region", SessionHistoryFilter.RegionModes, regionFilter, "setRegionFilter");
+        AppendSelect(sb, "movement-select", "filter.exercise",
+            SessionHistoryFilter.GetMovementModes(regionFilter), movementFilter, "setMovementFilter");
         sb.Append("</div>");
 
         sb.Append("<div class=\"cards\" id=\"summary-cards\"></div>");
@@ -160,7 +173,6 @@ public static class ProgressReportHtml
         sb.Append("</tbody></table>");
         ReportHtmlLang.AppendLocText(sb, "p", "report.disclaimer.short", "class=\"disclaimer\"");
 
-        // Seans detay modal
         sb.Append("<div id=\"detail-modal\" class=\"modal\" onclick=\"backdropClose(event)\">");
         sb.Append("<div class=\"modal-card\" role=\"dialog\">");
         sb.Append("<button type=\"button\" class=\"modal-close\" onclick=\"closeSession()\">&times;</button>");
@@ -234,8 +246,10 @@ public static class ProgressReportHtml
         }
         sb.Append("];var INITIAL_DATE='").Append(SessionHistoryFilter.ModeJsId(dateFilter)).Append("';");
         sb.Append("var INITIAL_QUALITY='").Append(SessionHistoryFilter.ModeJsId(qualityFilter)).Append("';");
-        sb.Append("var INITIAL_EXERCISE='").Append(SessionHistoryFilter.ModeJsId(exerciseFilter)).Append("';");
+        sb.Append("var INITIAL_REGION='").Append(SessionHistoryFilter.ModeJsId(regionFilter)).Append("';");
+        sb.Append("var INITIAL_MOVEMENT='").Append(SessionHistoryFilter.ModeJsId(movementFilter)).Append("';");
         sb.Append("var HIGH_STRAIN=").Append(SessionHistoryFilter.HighStrainThreshold.ToString("F2", Inv)).Append(';');
+        AppendMovementOptionsJson(sb);
         AppendI18nDict(sb);
         sb.Append(FilterScript);
         sb.Append("</script>");
@@ -250,12 +264,8 @@ public static class ProgressReportHtml
         return PatientVault.WriteEncrypted(patientDir, baseName + ".html", sb.ToString());
     }
 
-    /// <summary>
-    /// Filtre + grafik (Y=°, X=seans) + seans detay modal.
-    /// X tick adımı: 1, 5, 10, 15, 20 veya 30 (seans sayısına göre).
-    /// </summary>
     private const string FilterScript = @"
-var dateFilter=INITIAL_DATE, qualityFilter=INITIAL_QUALITY, exerciseFilter=INITIAL_EXERCISE, openSessionIdx=-1;
+var dateFilter=INITIAL_DATE, qualityFilter=INITIAL_QUALITY, regionFilter=INITIAL_REGION, movementFilter=INITIAL_MOVEMENT, openSessionIdx=-1;
 function L(k){var pack=I18N[typeof REPORT_LANG!=='undefined'?REPORT_LANG:'tr']||I18N.tr;return pack[k]||k;}
 function onReportLangChanged(){applyFilter();if(openSessionIdx>=0)openSession(openSessionIdx);}
 function sessionNotes(s){return (REPORT_LANG==='en'?(s.notesEn||s.notesTr):(s.notesTr||s.notesEn))||'';}
@@ -285,28 +295,64 @@ function qualityPass(s){
     default: return true;
   }
 }
+function regionIdFromFilter(f){
+  switch(f){
+    case 'regionShoulder': return 0;
+    case 'regionArm': return 1;
+    case 'regionElbow': return 2;
+    case 'regionNeck': return 3;
+    case 'regionLeg': return 4;
+    case 'regionAnkle': return 5;
+    default: return -1;
+  }
+}
+function moveIdFromFilter(f){
+  if(!f||f==='all') return -1;
+  if(f.indexOf('move')!==0) return -1;
+  var n=parseInt(f.substring(4),10);
+  return isNaN(n)?-1:n;
+}
+function regionPass(s){
+  if(regionFilter==='all') return true;
+  var want=regionIdFromFilter(regionFilter);
+  if(want<0) return true;
+  var r=s.region|0, m=s.move|0;
+  if(want===0 && r===0 && m===0) return true;
+  return r===want;
+}
+function movementPass(s){
+  if(movementFilter==='all') return true;
+  var want=moveIdFromFilter(movementFilter);
+  if(want<0) return true;
+  var m=s.move|0, r=s.region|0;
+  if(want===0 && r===0 && m===0) return true;
+  return m===want;
+}
+function exercisePass(s){ return regionPass(s)&&movementPass(s); }
 function filteredIdx(){var base=dateIdx(),out=[];for(var k=0;k<base.length;k++){var i=base[k];if(qualityPass(SESSIONS[i])&&exercisePass(SESSIONS[i]))out.push(i);}return out;}
 function pct(a,b){if(a<1)return 0;return ((b-a)/a)*100;}
 function fmtPct(p){return (p>=0?'+':'')+Math.round(p)+'%';}
 function setDateFilter(f){dateFilter=f;var sel=document.getElementById('date-select');if(sel&&sel.value!==f)sel.value=f;applyFilter();}
 function setQualityFilter(f){qualityFilter=f;var sel=document.getElementById('quality-select');if(sel&&sel.value!==f)sel.value=f;applyFilter();}
-function setExerciseFilter(f){exerciseFilter=f;var sel=document.getElementById('exercise-select');if(sel&&sel.value!==f)sel.value=f;applyFilter();}
-function exercisePass(s){
-  var region=s.region|0, move=s.move|0, unset=region===0&&move===0;
-  switch(exerciseFilter){
-    case 'regionShoulder': return region===0||unset;
-    case 'regionArm': return region===1;
-    case 'regionElbow': return region===2;
-    case 'regionNeck': return region===3;
-    case 'regionLeg': return region===4;
-    case 'regionAnkle': return region===5;
-    case 'moveShoulderAbd': return move===0||unset;
-    case 'moveShoulderFlex': return move===1;
-    default: return true;
+function setRegionFilter(f){regionFilter=f;var sel=document.getElementById('region-select');if(sel&&sel.value!==f)sel.value=f;rebuildMovementSelect();applyFilter();}
+function setMovementFilter(f){movementFilter=f;var sel=document.getElementById('movement-select');if(sel&&sel.value!==f)sel.value=f;applyFilter();}
+function rebuildMovementSelect(){
+  var sel=document.getElementById('movement-select'); if(!sel||!MOVEMENT_OPTIONS) return;
+  var opts=MOVEMENT_OPTIONS[regionFilter]||MOVEMENT_OPTIONS.all||[];
+  var keep=movementFilter;
+  sel.innerHTML='';
+  for(var i=0;i<opts.length;i++){
+    var o=document.createElement('option');
+    o.value=opts[i].id;
+    o.textContent=(REPORT_LANG==='en'?opts[i].en:opts[i].tr);
+    if(opts[i].id===keep) o.selected=true;
+    sel.appendChild(o);
   }
+  var found=false;
+  for(var j=0;j<opts.length;j++){ if(opts[j].id===keep){found=true;break;} }
+  if(!found){ movementFilter='all'; sel.value='all'; }
 }
 function applyFilter(){var idx=filteredIdx();var rows=document.querySelectorAll('#hist-body tr');var show={};for(var k=0;k<idx.length;k++)show[idx[k]]=true;var visible=0;for(var i=0;i<rows.length;i++){var on=!!show[i];rows[i].style.display=on?'':'none';if(on){visible++;rows[i].querySelector('.idx').textContent=visible;}}var cards=document.getElementById('summary-cards');if(idx.length<2){cards.innerHTML='<div class=""card""><div class=""k"">'+L('sessions')+'</div><div class=""v"">'+idx.length+'</div></div><div class=""card""><div class=""k"">'+L('pr')+'</div><div class=""v"">'+L('need')+'</div></div>';}else{var first=SESSIONS[idx[0]],last=SESSIONS[idx[idx.length-1]];var pr=fmtPct(pct(first.rMax>1?first.rMax:first.max,last.rMax>1?last.rMax:last.max));var pl=fmtPct(pct(first.lMax>1?first.lMax:first.max,last.lMax>1?last.lMax:last.max));var chg=last.max-first.max;var chgs=(chg>=0?'+':'')+Math.round(chg)+'\u00B0';cards.innerHTML='<div class=""card""><div class=""k"">'+L('sessions')+'</div><div class=""v"">'+idx.length+'</div></div><div class=""card""><div class=""k"">'+L('pr')+'</div><div class=""v"">'+pr+'</div></div><div class=""card""><div class=""k"">'+L('pl')+'</div><div class=""v"">'+pl+'</div></div><div class=""card""><div class=""k"">'+L('chg')+'</div><div class=""v"">'+chgs+'</div></div>';}redrawChart();}
-
 function xTickStep(n){
   if(n<=12) return 1;
   if(n<=25) return 5;
@@ -383,7 +429,6 @@ function redrawChart(){
   svg+='</svg>';
   host.innerHTML=svg;
 }
-
 function openSession(i){
   if(i<0||i>=SESSIONS.length) return;
   openSessionIdx=i;
@@ -450,7 +495,7 @@ function openSession(i){
 }
 function closeSession(){openSessionIdx=-1;document.getElementById('detail-modal').style.display='none';}
 function backdropClose(e){if(e.target&&e.target.id==='detail-modal')closeSession();}
-setDateFilter(INITIAL_DATE);setQualityFilter(INITIAL_QUALITY);setExerciseFilter(INITIAL_EXERCISE);
+setDateFilter(INITIAL_DATE);setQualityFilter(INITIAL_QUALITY);setRegionFilter(INITIAL_REGION);rebuildMovementSelect();setMovementFilter(INITIAL_MOVEMENT);
 ";
 
     private static void AppendI18nDict(StringBuilder sb)
@@ -505,8 +550,8 @@ setDateFilter(INITIAL_DATE);setQualityFilter(INITIAL_QUALITY);setExerciseFilter(
         {
             HistoryFilterMode mode = modes[i];
             string js = SessionHistoryFilter.ModeJsId(mode);
-            string tr = Loc.T(FilterLocKey(mode), AppLanguage.Turkish);
-            string en = Loc.T(FilterLocKey(mode), AppLanguage.English);
+            string tr = SessionHistoryFilter.ModeLabel(mode, AppLanguage.Turkish);
+            string en = SessionHistoryFilter.ModeLabel(mode, AppLanguage.English);
             sb.Append("<option value=\"").Append(js).Append('"');
             if (mode == selected) sb.Append(" selected");
             ReportHtmlLang.AppendBilingualAttrPair(sb, tr, en);
@@ -515,24 +560,35 @@ setDateFilter(INITIAL_DATE);setQualityFilter(INITIAL_QUALITY);setExerciseFilter(
         sb.Append("</select> ");
     }
 
-    private static string FilterLocKey(HistoryFilterMode mode)
+    private static void AppendMovementOptionsJson(StringBuilder sb)
     {
-        switch (mode)
+        sb.Append("var MOVEMENT_OPTIONS={");
+        AppendMovementOptionGroup(sb, "all", SessionHistoryFilter.AllMovementModes, first: true);
+        HistoryFilterMode[] regionModes = SessionHistoryFilter.RegionModes;
+        for (int i = 0; i < regionModes.Length; i++)
         {
-            case HistoryFilterMode.Last7Days: return "filter.week";
-            case HistoryFilterMode.Last30Days: return "filter.month";
-            case HistoryFilterMode.Last90Days: return "filter.quarter";
-            case HistoryFilterMode.Last5Sessions: return "filter.last5";
-            case HistoryFilterMode.Last10Sessions: return "filter.last10";
-            case HistoryFilterMode.Last20Sessions: return "filter.last20";
-            case HistoryFilterMode.WithCompensation: return "filter.withComp";
-            case HistoryFilterMode.NoCompensation: return "filter.noComp";
-            case HistoryFilterMode.HighStrain: return "filter.highStrain";
-            case HistoryFilterMode.IncompleteTarget: return "filter.incomplete";
-            case HistoryFilterMode.RightArmMeasured: return "filter.rightArm";
-            case HistoryFilterMode.LeftArmMeasured: return "filter.leftArm";
-            default: return "filter.all";
+            HistoryFilterMode regionMode = regionModes[i];
+            if (regionMode == HistoryFilterMode.All) continue;
+            AppendMovementOptionGroup(sb, SessionHistoryFilter.ModeJsId(regionMode),
+                SessionHistoryFilter.GetMovementModes(regionMode), first: false);
         }
+        sb.Append("};");
+    }
+
+    private static void AppendMovementOptionGroup(
+        StringBuilder sb, string key, HistoryFilterMode[] modes, bool first)
+    {
+        if (!first) sb.Append(',');
+        sb.Append('"').Append(key).Append("\":[");
+        for (int i = 0; i < modes.Length; i++)
+        {
+            if (i > 0) sb.Append(',');
+            HistoryFilterMode mode = modes[i];
+            sb.Append("{id:'").Append(SessionHistoryFilter.ModeJsId(mode)).Append("',tr:'")
+              .Append(EscapeJs(SessionHistoryFilter.ModeLabel(mode, AppLanguage.Turkish))).Append("',en:'")
+              .Append(EscapeJs(SessionHistoryFilter.ModeLabel(mode, AppLanguage.English))).Append("'}");
+        }
+        sb.Append(']');
     }
 
     private static void AppendStatsSection(StringBuilder sb, ProgressStats st)
